@@ -1,0 +1,101 @@
+name: museum-case-anomaly
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-museum-case-anomaly}-db
+    environment:
+      POSTGRES_DB: museum_case
+      POSTGRES_USER: museum
+      POSTGRES_PASSWORD: museum_pass
+    ports:
+      - "${DB_PORT:-17768}:5432"
+    volumes:
+      - museum_case_db:/var/lib/postgresql/data
+      - ./backend/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U museum -d museum_case"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    container_name: ${COMPOSE_PROJECT_NAME:-museum-case-anomaly}-redis
+    ports:
+      - "${REDIS_PORT:-16368}:6379"
+    volumes:
+      - museum_case_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    container_name: ${COMPOSE_PROJECT_NAME:-museum-case-anomaly}-backend
+    environment:
+      DATABASE_URL: postgresql://museum:museum_pass@db:5432/museum_case
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-museum-case-anomaly-secret}
+      SEED_DEMO: ${SEED_DEMO:-true}
+    ports:
+      - "${BACKEND_PORT:-19268}:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - museum_case_shared:/shared
+      - ./backend:/app
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)\""]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  worker:
+    build: ./backend
+    container_name: ${COMPOSE_PROJECT_NAME:-museum-case-anomaly}-worker
+    command: ["python", "-m", "src.worker"]
+    environment:
+      DATABASE_URL: postgresql://museum:museum_pass@db:5432/museum_case
+      REDIS_URL: redis://redis:6379/0
+      JWT_SECRET: ${JWT_SECRET:-museum-case-anomaly-secret}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - museum_case_shared:/shared
+      - ./backend:/app
+    healthcheck:
+      test: ["CMD-SHELL", "test -f /shared/worker-heartbeat && test $$(($$(date +%s) - $$(stat -c %Y /shared/worker-heartbeat))) -lt 30"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  frontend:
+    build: ./frontend
+    container_name: ${COMPOSE_PROJECT_NAME:-museum-case-anomaly}-frontend
+    ports:
+      - "${FRONTEND_PORT:-18268}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  museum_case_db:
+    name: museum-case-anomaly-db
+  museum_case_redis:
+    name: museum-case-anomaly-redis
+  museum_case_shared:
+    name: museum-case-anomaly-shared
