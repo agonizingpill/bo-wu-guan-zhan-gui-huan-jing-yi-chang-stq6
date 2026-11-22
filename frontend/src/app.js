@@ -5,6 +5,9 @@ const state = {
   cases: [],
   anomalies: [],
   dashboard: {},
+  groups: { candidates: [], singletons: [] },
+  selectedCandidate: null,
+  claimNote: '',
   selectedCase: null,
   selectedEvent: null,
   notice: ''
@@ -21,7 +24,8 @@ const api = async (path, options = {}) => {
 
 const esc = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
 const fmt = (value) => value ? new Date(value).toLocaleString('zh-CN', { hour12: false }) : '—';
-const label = (value) => ({active:'在岗', maintenance:'维护', retired:'停用', open:'待处置', triaged:'已接单', escalated:'已升级', resolved:'待关闭', closed:'已关闭', watch:'观察', high:'高', critical:'严重', door_interference:'门开干扰', environment_outlier:'环境离群', continuous_drift:'连续偏移'}[value] || value);
+const ticketLabel = { claimed: '已认领', in_progress: '处置中', closed: '已关闭', cancelled: '已撤销' };
+const label = (value) => ({active:'在岗', maintenance:'维护', retired:'停用', open:'待处置', triaged:'已接单', escalated:'已升级', resolved:'待关闭', closed:'已关闭', watch:'观察', high:'高', critical:'严重', door_interference:'门开干扰', environment_outlier:'环境离群', continuous_drift:'连续偏移', pending:'待认领', claimed:'已认领', superseded:'已替换', single_case:'单柜升级', group_candidate:'同厅归并'}[value] || value);
 const notify = (message) => { state.notice = message; render(); setTimeout(() => { state.notice = ''; render(); }, 3600); };
 
 function render() {
@@ -72,7 +76,7 @@ function nav(page, text, icon) { return `<button class="nav-item ${state.page===
 
 async function loadData() {
   try {
-    [state.dashboard, state.cases, state.anomalies] = await Promise.all([api('/dashboard'), api('/cases'), api('/anomalies')]);
+    [state.dashboard, state.cases, state.anomalies, state.groups] = await Promise.all([api('/dashboard'), api('/cases'), api('/anomalies'), api('/anomaly-groups/candidates')]);
     if (state.page === 'case' && !state.selectedCase && state.cases[0]) state.selectedCase = state.cases[0].id;
     if (state.page === 'anomalies' && !state.selectedEvent && state.anomalies[0]) state.selectedEvent = state.anomalies[0].id;
     renderContent();
@@ -105,10 +109,59 @@ function caseRow(c) { const health = c.active_event_count ? 'attention' : 'stead
 
 function anomaliesPage() {
   const selected = state.anomalies.find(item => item.id === state.selectedEvent) || state.anomalies[0];
-  return `<div class="split-layout"><section class="panel anomaly-list"><div class="panel-head"><div><p class="eyebrow">EVENT QUEUE / ${state.anomalies.length.toString().padStart(2,'0')}</p><h2>异常事件队列</h2></div><span class="filter-pill">全部 · ${state.anomalies.length}</span></div>${state.anomalies.length ? state.anomalies.map(eventRow).join('') : empty('目前没有待处置异常', '继续保持采样，新的异常会进入这里。')}</section><section class="panel detail-panel">${selected ? eventDetail(selected) : empty('选择一个异常事件', '从左侧队列打开处置详情。')}</section></div>`;
+  return `${groupBoard()}<div class="split-layout"><section class="panel anomaly-list"><div class="panel-head"><div><p class="eyebrow">EVENT QUEUE / ${state.anomalies.length.toString().padStart(2,'0')}</p><h2>异常事件队列</h2></div><span class="filter-pill">全部 · ${state.anomalies.length}</span></div>${state.anomalies.length ? state.anomalies.map(eventRow).join('') : empty('目前没有待处置异常', '继续保持采样，新的异常会进入这里。')}</section><section class="panel detail-panel">${selected ? eventDetail(selected) : empty('选择一个异常事件', '从左侧队列打开处置详情。')}</section></div>`;
 }
-function eventRow(e) { return `<button class="event-row ${state.selectedEvent===e.id?'selected':''}" data-event="${e.id}"><span class="severity ${e.severity}">${e.severity==='critical'?'!':'·'}</span><span><b>${esc(e.case_code)} · ${label(e.anomaly_type)}</b><small>${fmt(e.sampled_at)} · ${esc(e.reason)}</small></span><strong>${label(e.status)}</strong></button>`; }
-function eventDetail(e) { return `<div class="detail-kicker"><span class="severity ${e.severity}">${e.severity}</span><span>${label(e.anomaly_type)}</span><span>${label(e.status)}</span></div><h2>${esc(e.case_code)} / ${esc(e.artifact_title)}</h2><p class="detail-copy">${esc(e.reason)}</p><div class="data-strip"><div><small>异常分数</small><b>${Number(e.score).toFixed(3)}</b></div><div><small>采样时间</small><b>${fmt(e.sampled_at)}</b></div><div><small>门磁</small><b>${e.door_open?'开启干扰':'关闭'}</b></div></div><div class="measure-grid"><div><span>温度</span><b>${e.temperature} °C</b></div><div><span>相对湿度</span><b>${e.humidity} %</b></div><div><span>CO₂</span><b>${e.co2_ppm} ppm</b></div><div><span>连续计数</span><b>${e.consecutive_count}</b></div></div><div class="action-box"><p class="eyebrow">DUTY ACTION / 值守处置</p><div class="action-buttons">${e.door_context?'<button class="button amber" data-action="door">完成关门复核</button>':'<button class="button" data-action="adjust">记录环境调整</button>'}<button class="button" data-action="inspect">安排文物巡检</button>${e.status==='escalated'?'<button class="button dark" data-action="curator">记录馆长处置</button>':''}<button class="button primary" data-action="close">关闭异常</button></div><small>关闭条件：已完成值守动作 + 文物巡检通过。升级事件需追加馆长处置记录。</small></div>`; }
+
+function groupBoard() {
+  const candidates = state.groups.candidates || [];
+  const singletons = state.groups.singletons || [];
+  return `<section class="panel group-board">
+    <div class="panel-head"><div><p class="eyebrow">GALLERY MERGE / 05</p><h2>同厅归并待认领</h2></div><span class="filter-pill">${candidates.filter(c => c.status === 'pending').length} 条待认领 · ${singletons.length} 条单柜升级</span></div>
+    <p class="group-hint">同厅展柜温度与湿度同向偏移、采样时段重叠且异常评分接近时归并为一条候选。认领后处置单保留当时的成员与依据；越过保护范围的告警不参与归并，仍按单柜升级。</p>
+    <div class="candidate-list">${candidates.length ? candidates.map(candidateCard).join('') : `<div class="group-empty">当前没有满足归并条件的同厅告警。</div>`}</div>
+    <div class="singleton-block"><p class="eyebrow">SINGLE CASE ESCALATION</p>${singletons.length ? `<div class="singleton-list">${singletons.map(singletonRow).join('')}</div>` : '<div class="group-empty">没有越过保护范围的单柜告警。</div>'}</div>
+  </section>`;
+}
+
+function candidateCard(c) {
+  const ticket = c.ticket;
+  const memberCodes = [...new Set((c.members || []).map(m => m.case_code))];
+  const claimable = c.status === 'pending' && ['operator', 'supervisor'].includes(state.user?.role);
+  return `<article class="candidate-card ${c.status}">
+    <header><span class="candidate-gallery">${esc(c.gallery)}</span><span class="candidate-status">${label(c.status)}</span></header>
+    <b class="candidate-direction">${esc(c.direction_label)}</b>
+    <div class="candidate-metrics"><span><small>展柜</small>${c.member_count}</span><span><small>时段</small>${fmt(c.window_start)} → ${fmt(c.window_end).slice(-8)}</span><span><small>评分</small>${Number(c.score_min).toFixed(3)} ~ ${Number(c.score_max).toFixed(3)}</span></div>
+    <p class="candidate-members">${memberCodes.map(code => `<span>${esc(code)}</span>`).join('')}</p>
+    <p class="candidate-basis">${esc(c.evidence?.rule || '')}</p>
+    ${ticket ? `<p class="candidate-ticket">处置单 #${ticket.id} · ${esc(ticket.claimed_by_name || '')} 已认领 · ${ticketLabel[ticket.status] || ticket.status}</p>` : ''}
+    ${claimable ? `<div class="claim-box"><input class="claim-note" data-claim-note="${c.id}" placeholder="认领依据（至少 4 字）" maxlength="500" value="${esc(state.claimNote)}"><button class="button primary" data-claim="${c.id}">认领派单</button></div>` : ''}
+  </article>`;
+}
+
+function singletonRow(s) {
+  return `<div class="singleton-row"><span class="case-code">${esc(s.case_code)}</span><span><b>${esc(s.artifact_title)}</b><small>${esc(s.gallery)} · ${fmt(s.sampled_at)} · ${(s.breaches || []).join(' / ') || '越过保护范围'}</small></span><strong>单柜升级</strong></div>`;
+}
+
+function groupBadge(e) {
+  if (e.ticket) return `<span class="group-tag ticket">处置单 #${e.ticket.id}</span>`;
+  if (e.candidate && e.candidate.status === 'pending') return `<span class="group-tag">同厅归并 · ${esc(e.candidate.gallery)}</span>`;
+  if (e.escalation_basis === 'single_case') return `<span class="group-tag single">单柜升级</span>`;
+  return '';
+}
+
+function eventRow(e) { return `<button class="event-row ${state.selectedEvent===e.id?'selected':''}" data-event="${e.id}"><span class="severity ${e.severity}">${e.severity==='critical'?'!':'·'}</span><span><b>${esc(e.case_code)} · ${label(e.anomaly_type)}</b><small>${fmt(e.sampled_at)} · ${esc(e.reason)}</small>${groupBadge(e)}</span><strong>${label(e.status)}</strong></button>`; }
+
+function groupEvidence(e) {
+  if (e.ticket) return `<div class="evidence-card"><p class="eyebrow">CLAIMED TICKET / 处置单</p><p>处置单 #${e.ticket.id} 由 ${esc(e.ticket.claimed_by_name || '')} 于 ${fmt(e.ticket.claimed_at)} 认领，当前状态「${ticketLabel[e.ticket.status] || e.ticket.status}」。派单保留认领时的成员与依据。</p></div>`;
+  if (e.candidate) {
+    const members = e.candidate.members || [];
+    return `<div class="evidence-card"><p class="eyebrow">GROUP BASIS / 成组依据</p><p><b>${esc(e.candidate.gallery)}</b> · ${esc(e.candidate.direction_label)} · ${e.candidate.member_count} 个展柜 · 时段 ${fmt(e.candidate.window_start)} → ${fmt(e.candidate.window_end)}</p><ul class="evidence-members">${members.map(m => `<li><span class="case-code">${esc(m.case_code)}</span><span>${esc(m.artifact_title)}</span><small>${Number(m.score).toFixed(3)} · ${fmt(m.sampled_at)}</small></li>`).join('')}</ul><small>${esc(e.candidate.basis || '')}</small></div>`;
+  }
+  if (e.escalation_basis === 'single_case') return `<div class="evidence-card single"><p class="eyebrow">SINGLE CASE ESCALATION / 单柜升级</p><p>该告警的采样越过展柜温湿保护范围，不参与同厅归并，保持单柜升级处理。</p></div>`;
+  return '';
+}
+
+function eventDetail(e) { return `<div class="detail-kicker"><span class="severity ${e.severity}">${e.severity}</span><span>${label(e.anomaly_type)}</span><span>${label(e.status)}</span></div><h2>${esc(e.case_code)} / ${esc(e.artifact_title)}</h2><p class="detail-copy">${esc(e.reason)}</p>${groupEvidence(e)}<div class="data-strip"><div><small>异常分数</small><b>${Number(e.score).toFixed(3)}</b></div><div><small>采样时间</small><b>${fmt(e.sampled_at)}</b></div><div><small>门磁</small><b>${e.door_open?'开启干扰':'关闭'}</b></div></div><div class="measure-grid"><div><span>温度</span><b>${e.temperature} °C</b></div><div><span>相对湿度</span><b>${e.humidity} %</b></div><div><span>CO₂</span><b>${e.co2_ppm} ppm</b></div><div><span>连续计数</span><b>${e.consecutive_count}</b></div></div><div class="action-box"><p class="eyebrow">DUTY ACTION / 值守处置</p><div class="action-buttons">${e.door_context?'<button class="button amber" data-action="door">完成关门复核</button>':'<button class="button" data-action="adjust">记录环境调整</button>'}<button class="button" data-action="inspect">安排文物巡检</button>${e.status==='escalated'?'<button class="button dark" data-action="curator">记录馆长处置</button>':''}<button class="button primary" data-action="close">关闭异常</button></div><small>关闭条件：已完成值守动作 + 文物巡检通过。升级事件需追加馆长处置记录。</small></div>`; }
 
 function inspectionsPage() {
   return `<div class="inspection-layout"><section class="panel inspection-intro"><p class="eyebrow">ARTIFACT CHECK / POST-INCIDENT</p><h2>巡检是异常闭环的最后一道门</h2><p>每一次环境异常都要留下文物状态证据。巡检通过后，主管才可以关闭异常。失败会把事件重新打开，并保留原因与操作者。</p><div class="inspection-mark">⊙</div></section><section class="panel inspection-table"><div class="panel-head"><div><p class="eyebrow">RECENT CHECKS</p><h2>最近巡检</h2></div><button class="text-button" data-page="anomalies">回到异常队列 →</button></div>${state.anomalies.map(e => `<div class="inspection-row"><span class="case-code">${esc(e.case_code)}</span><span><b>${esc(e.artifact_title)}</b><small>${label(e.anomaly_type)} · ${fmt(e.created_at)}</small></span><span class="result ${e.passed_checks ? 'pass' : 'pending'}">${e.passed_checks ? '已通过' : '待巡检'}</span><button class="text-button" data-event="${e.id}">打开 →</button></div>`).join('')}</section></div>`;
@@ -127,10 +180,27 @@ function bind() {
 function bindPage() {
   document.querySelectorAll('[data-case]').forEach(button => button.addEventListener('click', async () => { state.selectedCase = Number(button.dataset.case); if (state.page === 'monitor') { state.page='case'; } render(); await loadData(); if (state.page === 'case') { const detail = await api(`/cases/${state.selectedCase}`); state.cases = state.cases.map(c => c.id===state.selectedCase ? {...c, ...detail} : c); renderContent(); } }));
   document.querySelectorAll('[data-event]').forEach(button => button.addEventListener('click', async () => { state.selectedEvent = Number(button.dataset.event); state.page='anomalies'; render(); await loadData(); }));
+  document.querySelectorAll('[data-claim-note]').forEach(input => input.addEventListener('input', () => { state.claimNote = input.value; }));
+  document.querySelectorAll('[data-claim]').forEach(button => button.addEventListener('click', () => claimCandidate(Number(button.dataset.claim), button)));
   document.querySelector('#analyze-case')?.addEventListener('click', async (event) => { try { const run = await api(`/analyze?case_id=${event.currentTarget.dataset.caseId}`, { method: 'POST' }); notify(`算法任务 #${run.id} 已入队，worker 正在处理`); pollRun(run.id); } catch (error) { notify(error.message); } });
   document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => handleAction(button.dataset.action)));
 }
 async function pollRun(id) { for (let i=0;i<15;i++) { await new Promise(r => setTimeout(r, 1000)); const run = await api(`/runs/${id}`); if (run.status === 'succeeded') { notify(`异常识别完成，发现 ${run.metrics.outlier_count} 个候选事件`); await loadData(); return; } if (run.status === 'failed') { notify(run.error); return; } } }
+async function claimCandidate(id, button) {
+  const candidate = (state.groups.candidates || []).find(item => item.id === id);
+  const note = (state.claimNote || '').trim();
+  if (!candidate) return;
+  if (note.length < 4) { notify('请填写至少 4 个字的认领依据'); return; }
+  const requestId = `claim-${id}-${candidate.revision}-${state.user?.id}-${Date.now()}`;
+  button.disabled = true;
+  try {
+    const ticket = await api(`/anomaly-groups/candidates/${id}/claim`, { method: 'POST', body: JSON.stringify({ revision: candidate.revision, note, request_id: requestId }) });
+    state.claimNote = '';
+    notify(`处置单 #${ticket.id} 已认领，保留 ${ticket.members.length} 条告警与认领依据`);
+    await loadData();
+  } catch (error) { notify(error.message); }
+  finally { button.disabled = false; }
+}
 async function handleAction(action) { const e = state.anomalies.find(item => item.id === state.selectedEvent); if (!e) return; try { if (action === 'close') { await api(`/anomalies/${e.id}/close`, { method: 'POST' }); notify('异常已关闭'); } else if (action === 'inspect') { await api(`/anomalies/${e.id}/artifact-checks`, { method: 'POST', body: JSON.stringify({case_id:e.case_id,event_id:e.id,check_type:'post_incident',result:'pass',notes:'夜班巡检确认展柜玻璃、底座与文物状态正常'}) }); notify('文物巡检已记录为通过'); } else { const map = { door:'verify_door_sealed', adjust:'adjust_climate', curator:'call_curator' }; await api(`/anomalies/${e.id}/duty-actions`, { method:'POST', body: JSON.stringify({action_type:map[action], notes: action==='door'?'门已关闭，复采前完成门磁复核':'已按值守清单完成处置记录', status:'completed'}) }); notify('值守动作已写入审计'); } await loadData(); } catch (error) { notify(error.message); } }
 
 render();

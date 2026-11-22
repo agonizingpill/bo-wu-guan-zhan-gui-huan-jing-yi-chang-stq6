@@ -17,6 +17,7 @@
 - **展柜档案**。维护展厅、区域、文物绑定、环境窗口和门磁编号。
 - **环境采样**。录入带时间的温度、相对湿度、CO₂、门磁状态和现场备注，后端限制可测范围与采样间隔。
 - **异常事件**。worker 使用 `RobustScaler + IsolationForest` 计算无标签异常分数，识别环境离群、门开干扰和连续偏移。
+- **同厅归并派单**。同展厅多柜同向温湿偏移且时段重叠时归并为待认领候选，值守认领后由一张处置单统一处置；越过保护范围的告警保持单柜升级。
 - **值守处置**。按事件上下文写入关门复核、环境调整、传感器检查或馆长处置，动作和操作者进入审计日志。
 - **文物巡检**。异常后记录文物、底座、玻璃状态。巡检失败会重新打开事件。
 
@@ -127,3 +128,35 @@ Internal evaluation project. No external distribution license is granted.
 - 采样断档补齐验收
 - 异常后环境解除观察
 - 馆长升级与文物放行
+
+## 同厅异常归并与认领派单
+
+夜班看到同厅多只展柜一起偏离时，常把一次空调故障拆成几起独立告警。异常页面新增「同厅归并待认领」看板，把这类告警收成一条候选，由值守认领后统一处置。
+
+**归并口径**（实现于 `backend/src/anomaly_grouping.py`）
+
+- 同一展厅 `display_cases.gallery`。
+- 同向温湿偏移：温度与湿度相对展柜目标窗口中点的偏移方向一致，温度偏移 ≥ 0.2 °C、湿度偏移 ≥ 0.5 %。
+- 时段重叠：成员采样时间跨度不超过 20 分钟，异常评分极差不超过 0.30。
+- 至少覆盖 2 个不同展柜；门开干扰只做观察，不参与归并。
+- 采样越过展柜温湿保护范围（目标窗口）的告警不参与归并，仍按单柜升级，看板单列展示。
+
+**认领与派单**
+
+- `POST /anomaly-groups/candidates/{id}/claim` 需携带读取到的 `revision` 与认领依据；带 `request_id` 时按请求号幂等。
+- 处置单保存领单时的成员快照（`member_snapshot`）与成组依据（`evidence`），之后重算候选或关闭成员都不会改写它。
+- 随后出分的展柜会进入新的候选，已认领候选保持原成员。
+- 并发认领时 `handling_ticket_members.event_id` 唯一约束保证同一告警只进一张处置单。
+- 派单分两步：先写 `dispatch_attempts` 意图（含成员与依据快照），再在独立事务中成单。进程中断后由启动钩子、worker 心跳与 `POST /anomaly-groups/dispatch/resume`（主管）恢复；`dispatch_key` 唯一约束保证重试不会重复开单。
+
+**接口**
+
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| GET | `/anomaly-groups/candidates` | 待认领候选与单柜升级列表 |
+| GET | `/anomaly-groups/candidates/{id}` | 单条候选与成组依据 |
+| POST | `/anomaly-groups/candidates/{id}/claim` | 认领并派发处置单 |
+| GET | `/anomaly-groups/tickets`、`/tickets/{id}` | 处置单与领单快照 |
+| POST | `/anomaly-groups/dispatch/resume` | 主管手动恢复中断派单 |
+
+`GET /anomalies` 与 `GET /anomalies/{id}` 会附带 `candidate`（同厅归并依据）与 `ticket`（处置单）字段，异常详情页据此展示成组依据和单柜升级。

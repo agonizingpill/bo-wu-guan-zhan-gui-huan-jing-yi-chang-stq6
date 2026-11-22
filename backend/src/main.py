@@ -10,6 +10,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
+from .anomaly_group_routes import router as anomaly_groups
+from .anomaly_grouping import annotations_for_events, ensure_schema as ensure_grouping_schema, refresh_candidates, resume_dispatches
 from .casework_routes import router as operational_cases
 from .operations_evidence import router as operations_evidence
 from src.config.settings import REDIS_URL
@@ -20,6 +22,7 @@ from src.utils.db import clean, execute, execute_returning, fetch_all, fetch_one
 app = FastAPI(title='展柜环境异常值守台', version='1.0.0')
 app.include_router(operational_cases)
 app.include_router(operations_evidence)
+app.include_router(anomaly_groups)
 redis_client = redis.Redis.from_url(REDIS_URL, decode_responses=True)
 
 
@@ -117,6 +120,9 @@ def startup():
     if os.getenv('SEED_DEMO', 'true').lower() == 'true':
         from scripts.seed_demo import main as seed_main
         seed_main()
+    ensure_grouping_schema()
+    refresh_candidates()
+    resume_dispatches()
 
 
 @app.get('/health')
@@ -265,7 +271,11 @@ def anomalies(status: str | None = None, user=Depends(current_user)):
         query += ' WHERE e.status=%s'
         params = (status,)
     query += ' ORDER BY e.created_at DESC'
-    return clean(fetch_all(query, params))
+    rows = clean(fetch_all(query, params))
+    annotations = annotations_for_events(row['id'] for row in rows)
+    for row in rows:
+        row.update(annotations.get(row['id'], {'candidate': None, 'ticket': None}))
+    return rows
 
 
 @app.get('/anomalies/{event_id}')
@@ -273,7 +283,9 @@ def anomaly_detail(event_id: int, user=Depends(current_user)):
     event = get_event_or_404(event_id)
     event['actions'] = fetch_all('SELECT d.*, u.display_name AS operator_name FROM duty_actions d JOIN users u ON u.id=d.operator_id WHERE d.event_id=%s ORDER BY d.started_at DESC', (event_id,))
     event['checks'] = fetch_all('SELECT a.*, u.display_name AS inspector_name FROM artifact_checks a JOIN users u ON u.id=a.inspector_id WHERE a.event_id=%s ORDER BY a.checked_at DESC', (event_id,))
-    return clean(event)
+    event = clean(event)
+    event.update(annotations_for_events([event_id]).get(event_id, {'candidate': None, 'ticket': None}))
+    return event
 
 
 @app.post('/anomalies/{event_id}/duty-actions')

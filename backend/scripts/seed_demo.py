@@ -72,6 +72,7 @@ def main():
     cases['MC-02'] = get_case(('MC-02', '丝路文物展厅', '西侧 07 号展柜', 'SR-044', '唐三彩骆驼俑', 18.0, 22.0, 42.0, 52.0, 'active', 'door-mc02'))
     cases['MC-03'] = get_case(('MC-03', '玉器展厅', '北侧 03 号展柜', 'JA-006', '汉代龙纹玉璧', 20.0, 24.0, 40.0, 50.0, 'active', 'door-mc03'))
     cases['MC-04'] = get_case(('MC-04', '瓷器展厅', '南侧 05 号展柜', 'PO-071', '北宋汝窑天青釉盘', 18.5, 22.5, 44.0, 54.0, 'active', 'door-mc04'))
+    cases['MC-05'] = get_case(('MC-05', '青铜器展厅', '东侧 05 号展柜', 'BR-052', '鎏金铜羽人', 19.0, 23.0, 45.0, 55.0, 'active', 'door-mc05'))
 
     base = datetime(2026, 11, 21, 18, 0, tzinfo=timezone.utc)
     for index, (temp, rh, co2) in enumerate([(21.0, 49.0, 620), (21.2, 49.5, 640), (20.9, 48.8, 610), (21.1, 49.2, 630), (21.0, 49.1, 625), (21.2, 49.3, 635), (21.1, 49.0, 615), (21.0, 49.2, 628)]):
@@ -90,6 +91,25 @@ def main():
     for index, values in enumerate([(20.1, 50.0, 590), (20.0, 50.2, 605), (20.2, 49.8, 600), (20.1, 50.1, 610), (20.0, 49.9, 600), (20.2, 50.0, 615)]):
         sample(cases['MC-04'], base + timedelta(minutes=index * 10), *values, False, '日常巡检基线')
 
+    # 青铜器展厅同厅归并：MC-01 与 MC-05 同向温升、湿升，时段重叠，形成待认领候选。
+    for index, values in enumerate([(22.3, 51.0, 700), (22.7, 51.6, 715)]):
+        sample(cases['MC-01'], base + timedelta(minutes=(8 + index) * 10), *values, False, '同厅温升观察样本')
+    for index, values in enumerate([(21.0, 49.0, 620), (21.2, 49.4, 640), (22.4, 51.2, 690), (22.9, 52.1, 720), (22.6, 51.8, 705)]):
+        sample(cases['MC-05'], base + timedelta(minutes=(5 + index) * 10), *values, False, '同厅温升观察样本')
+    gallery_pair = fetch_one(
+        '''SELECT s1.id AS a_id, s2.id AS b_id FROM environment_samples s1 JOIN environment_samples s2
+           ON s2.case_id=%s AND s2.sampled_at=s1.sampled_at
+           WHERE s1.case_id=%s AND s1.sampled_at=%s''',
+        (cases['MC-05'], cases['MC-01'], base + timedelta(minutes=80)),
+    )
+    if gallery_pair:
+        seed_event(cases['MC-01'], gallery_pair['a_id'], -0.18, -0.12, 'environment_outlier', 'high', 'open', False, 1, False, '同厅两组展柜同时出现温升与湿升')
+        seed_event(cases['MC-05'], gallery_pair['b_id'], -0.21, -0.12, 'environment_outlier', 'high', 'open', False, 1, False, '同厅两组展柜同时出现温升与湿升')
+
+    # 越过保护范围的告警保持单柜升级：MC-04 温度 26.0 °C 超出 18.5—22.5 °C。
+    breach_id = sample(cases['MC-04'], base + timedelta(minutes=70), 26.0, 55.5, 640, False, '空调出风口直吹，越过保护范围')
+    seed_event(cases['MC-04'], breach_id, -0.42, -0.12, 'environment_outlier', 'critical', 'escalated', False, 1, True, '温度越过展柜保护上限，单柜升级馆长')
+
     execute("UPDATE display_cases SET last_sample_at=(SELECT MAX(sampled_at) FROM environment_samples WHERE case_id=display_cases.id)")
     execute(
         '''INSERT INTO audit_logs (actor_id, action, entity_type, entity_id, detail)
@@ -97,7 +117,7 @@ def main():
            WHERE NOT EXISTS (SELECT 1 FROM audit_logs WHERE action='seed_demo' AND detail->>'batch'='night-shift-2026-11-21')''',
         (operator['id'],),
     )
-    print('seed_demo complete: 4 display cases, 28 samples, 2 seeded anomaly events, 3 users')
+    print('seed_demo complete: 5 display cases, 33 samples, 4 seeded anomaly events, 3 users')
 
 
 if __name__ == '__main__':

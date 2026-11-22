@@ -49,6 +49,16 @@ def fetch_one(sql, params=()):
     return rows[0] if rows else None
 
 
+def query(sql, params=()):
+    """Run a statement and return positional tuples (works for DDL too)."""
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+            if cur.description is None:
+                return []
+            return [tuple(row) for row in cur.fetchall()]
+
+
 def execute(sql, params=()):
     with get_conn() as conn:
         with conn.cursor() as cur:

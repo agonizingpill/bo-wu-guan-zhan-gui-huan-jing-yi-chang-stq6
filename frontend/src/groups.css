@@ -1,0 +1,37 @@
+.group-board { margin-bottom: 25px; }
+.group-hint { margin: 0; padding: 16px 25px; color: var(--muted); font-size: 12px; line-height: 1.65; border-bottom: 1px solid var(--line); }
+.candidate-list { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 0; }
+.candidate-card { padding: 20px 25px; border-bottom: 1px solid var(--line); border-right: 1px solid var(--line); display: grid; gap: 10px; align-content: start; }
+.candidate-card.claimed { background: var(--cream); }
+.candidate-card header { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.candidate-gallery { font: 12px 'DM Mono'; color: var(--rust); }
+.candidate-status { border: 1px solid var(--line); padding: 4px 8px; font: 10px 'DM Mono'; color: var(--muted); }
+.candidate-card.claimed .candidate-status { color: var(--green); border-color: var(--green); }
+.candidate-direction { font-size: 15px; letter-spacing: -.02em; }
+.candidate-metrics { display: flex; flex-wrap: wrap; gap: 6px 18px; font: 11px 'DM Mono'; color: var(--ink); }
+.candidate-metrics small { display: block; color: var(--muted); font-size: 9px; letter-spacing: .06em; margin-bottom: 3px; }
+.candidate-members { display: flex; flex-wrap: wrap; gap: 6px; margin: 0; }
+.candidate-members span { border: 1px solid var(--line); padding: 3px 8px; font: 10px 'DM Mono'; color: var(--rust); }
+.candidate-basis { margin: 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
+.candidate-ticket { margin: 0; padding: 8px 10px; background: var(--night); color: var(--paper); font-size: 11px; }
+.claim-box { display: flex; gap: 8px; flex-wrap: wrap; }
+.claim-box .claim-note { flex: 1 1 160px; border: 1px solid var(--line); background: transparent; padding: 9px 10px; font: 12px 'Space Grotesk', sans-serif; }
+.claim-box .button { padding: 9px 12px; font-size: 12px; }
+.group-empty { padding: 22px 25px; color: var(--muted); font-size: 12px; border-bottom: 1px solid var(--line); }
+.singleton-block .eyebrow { padding: 16px 25px 0; }
+.singleton-list { display: grid; }
+.singleton-row { display: grid; grid-template-columns: 75px 1fr auto; gap: 15px; align-items: center; padding: 13px 25px; border-bottom: 1px solid var(--line); }
+.singleton-row b { display: block; font-size: 13px; }
+.singleton-row small { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+.singleton-row strong { font: 10px 'DM Mono'; color: var(--rust); }
+.group-tag { display: inline-block; margin-top: 7px; border: 1px solid var(--amber); padding: 2px 7px; font: 9px 'DM Mono'; color: var(--rust); }
+.group-tag.ticket { border-color: var(--green); color: var(--green); }
+.group-tag.single { border-color: var(--rust); color: var(--rust); }
+.evidence-card { margin: 18px 25px 0; padding: 16px 18px; background: var(--cream); border-left: 3px solid var(--amber); }
+.evidence-card.single { border-left-color: var(--rust); }
+.evidence-card p { margin: 0 0 8px; font-size: 12px; line-height: 1.6; }
+.evidence-card small { color: var(--muted); font-size: 11px; line-height: 1.6; }
+.evidence-members { list-style: none; margin: 8px 0; padding: 0; display: grid; gap: 5px; }
+.evidence-members li { display: grid; grid-template-columns: 70px 1fr auto; gap: 10px; font-size: 11px; align-items: center; }
+.evidence-members small { font: 10px 'DM Mono'; }
+@media (max-width: 760px) { .candidate-list { grid-template-columns: 1fr; } .singleton-row { grid-template-columns: 62px 1fr; } }

@@ -13,6 +13,8 @@ CONTAMINATION = 0.22
 
 
 def run_case_analysis(case_id: int, run_id: int):
+    from src.anomaly_grouping import ensure_schema as ensure_grouping_schema, refresh_candidates
+    ensure_grouping_schema()
     samples = fetch_all(
         '''SELECT s.*, c.target_temp_min, c.target_temp_max, c.target_rh_min, c.target_rh_max
            FROM environment_samples s JOIN display_cases c ON c.id=s.case_id
@@ -67,7 +69,15 @@ def run_case_analysis(case_id: int, run_id: int):
                 '''INSERT INTO anomaly_events
                    (case_id, sample_id, algorithm_run_id, score, threshold, anomaly_type, severity,
                     status, door_context, consecutive_count, escalated_to_curator, reason, created_by)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL) RETURNING id''',
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,NULL)
+                   ON CONFLICT (sample_id) DO UPDATE SET
+                       algorithm_run_id=EXCLUDED.algorithm_run_id, score=EXCLUDED.score,
+                       threshold=EXCLUDED.threshold, anomaly_type=EXCLUDED.anomaly_type,
+                       severity=EXCLUDED.severity, status=EXCLUDED.status,
+                       door_context=EXCLUDED.door_context,
+                       consecutive_count=EXCLUDED.consecutive_count,
+                       escalated_to_curator=EXCLUDED.escalated_to_curator, reason=EXCLUDED.reason
+                   RETURNING id''',
                 (case_id, row['id'], run_id, float(score), threshold, anomaly_type, severity, status, door_context, previous_flagged, escalated, reason),
             )
             event_id = event['id']
@@ -92,4 +102,6 @@ def run_case_analysis(case_id: int, run_id: int):
         'UPDATE algorithm_runs SET status=\'succeeded\', metrics=%s::jsonb, result=%s::jsonb, updated_at=NOW() WHERE id=%s',
         (json.dumps(clean(metrics), ensure_ascii=False), json.dumps(clean(result), ensure_ascii=False), run_id),
     )
+    # 评分完成后重算同厅候选：新出分的展柜可以并入新的候选，已认领的成员保持处置单快照。
+    refresh_candidates()
     return metrics, result
